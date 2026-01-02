@@ -6,6 +6,7 @@ import numpy as np
 from flask import Flask, Response, render_template_string
 from mpu6050 import mpu6050
 from picamera2 import Picamera2
+from picamera2.encoders import H264Encoder
 
 # --- Configuration ---
 USB_PATH = "/mnt/usb"
@@ -21,7 +22,7 @@ picam2 = Picamera2()
 # 2. Lo-res stream (400x300) for web preview to save bandwidth/CPU
 config = picam2.create_video_configuration(
     main={"format": "XRGB8888", "size": (1280, 720)},
-    lores={"format": "XRGB8888", "size": (400, 300)}
+    lores={"format": "YUV420", "size": (400, 300)}
 )
 picam2.configure(config)
 picam2.start()
@@ -57,9 +58,12 @@ def imu_logger_thread(csv_writer, stop_event):
 def generate_frames():
     while True:
         # Pull from the low-res stream for the web
-        frame = picam2.capture_array("lores")
+        frame_data = picam2.capture_array("lores")
+        # convert yuv420 to bgr
+        bgr_frame = cv2.cvtColor(frame_data, cv2.COLOR_YUV2BGR_I420)
+
         # Convert BGR to JPEG
-        _, buffer = cv2.imencode('.jpg', frame)
+        _, buffer = cv2.imencode('.jpg', bgr_frame)
         frame_bytes = buffer.tobytes()
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         time.sleep(0.1) # Limit web view to 10fps to save CPU
@@ -104,7 +108,7 @@ def toggle():
         imu_stop_event = threading.Event()
         imu_thread = threading.Thread(target=imu_logger_thread, args=(writer, imu_stop_event))
         
-        picam2.start_recording(video_path)
+        picam2.start_recording(H264Encoder(), video_path)
         imu_thread.start()
         is_recording = True
     else:
